@@ -7,6 +7,74 @@ app.use(express.json({ limit: '10mb' }));
 
 const logs = [];
 
+function isEmptyValue(value) {
+  if (value === null || value === undefined) {
+    return true;
+  }
+  if (typeof value === 'string' && value.trim() === '') {
+    return true;
+  }
+  if (Array.isArray(value) && value.length === 0) {
+    return true;
+  }
+  if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) {
+    return true;
+  }
+  return false;
+}
+
+function cleanObject(obj) {
+  if (Array.isArray(obj)) {
+    const cleaned = obj
+      .map((item) => {
+        if (item !== null && typeof item === 'object') {
+          return cleanObject(item);
+        }
+        return item;
+      })
+      .filter((item) => !isEmptyValue(item));
+    return cleaned;
+  }
+
+  if (obj !== null && typeof obj === 'object') {
+    const result = {};
+    for (const key of Object.keys(obj)) {
+      const value = obj[key];
+      if (value !== null && typeof value === 'object') {
+        const cleaned = cleanObject(value);
+        if (!isEmptyValue(cleaned)) {
+          result[key] = cleaned;
+        }
+      } else if (!isEmptyValue(value)) {
+        result[key] = value;
+      }
+    }
+    return result;
+  }
+
+  return obj;
+}
+
+function isEmptyDeep(value) {
+  if (value === null || value === undefined) {
+    return true;
+  }
+  if (typeof value === 'string') {
+    return value.trim() === '';
+  }
+  if (typeof value !== 'object') {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.every(isEmptyDeep);
+  }
+  const keys = Object.keys(value);
+  if (keys.length === 0) {
+    return true;
+  }
+  return keys.every((key) => isEmptyDeep(value[key]));
+}
+
 function isValidEvent(event) {
   if (!event || typeof event !== 'object') {
     return false;
@@ -23,9 +91,11 @@ function isValidEvent(event) {
     }
   }
 
-  if (event.data !== undefined && event.data !== null && typeof event.data === 'object') {
-    if (Object.keys(event.data).length === 0) {
-      return false;
+  if (event.data !== undefined && event.data !== null) {
+    if (typeof event.data === 'object') {
+      if (isEmptyDeep(event.data)) {
+        return false;
+      }
     }
   }
 
@@ -82,11 +152,15 @@ app.post('/api/track', (req, res) => {
     });
   }
 
-  const savedEvents = validEvents.map((event) => ({
-    ...event,
-    timestamp: event.timestamp || Date.now(),
-    receivedAt: new Date().toISOString(),
-  }));
+  const savedEvents = validEvents.map((event) => {
+    const cleaned = { ...event };
+    if (cleaned.data !== undefined && cleaned.data !== null && typeof cleaned.data === 'object') {
+      cleaned.data = cleanObject(cleaned.data);
+    }
+    cleaned.timestamp = cleaned.timestamp || Date.now();
+    cleaned.receivedAt = new Date().toISOString();
+    return cleaned;
+  });
 
   logs.push(...savedEvents);
 
