@@ -5,7 +5,66 @@ const PORT = 3000;
 
 app.use(express.json({ limit: '10mb' }));
 
-const logs = [];
+const EVENT_TYPES = {
+  PAGE: 'page',
+  CLICK: 'click',
+  EXPOSURE: 'exposure',
+  OTHER: 'other',
+};
+
+const logsByType = {
+  [EVENT_TYPES.PAGE]: [],
+  [EVENT_TYPES.CLICK]: [],
+  [EVENT_TYPES.EXPOSURE]: [],
+  [EVENT_TYPES.OTHER]: [],
+};
+
+function getAllLogs() {
+  return [].concat(...Object.values(logsByType));
+}
+
+function classifyEvent(event) {
+  if (!event || typeof event !== 'object') {
+    return EVENT_TYPES.OTHER;
+  }
+
+  if (event.eventType && typeof event.eventType === 'string') {
+    const typeLower = event.eventType.toLowerCase();
+    if (typeLower === 'page' || typeLower === 'pv' || typeLower === 'page_view') {
+      return EVENT_TYPES.PAGE;
+    }
+    if (typeLower === 'click') {
+      return EVENT_TYPES.CLICK;
+    }
+    if (typeLower === 'exposure' || typeLower === 'pv_element' || typeLower === 'impression' || typeLower === 'show') {
+      return EVENT_TYPES.EXPOSURE;
+    }
+  }
+
+  if (event.eventName && typeof event.eventName === 'string') {
+    const nameLower = event.eventName.toLowerCase();
+    if (nameLower.includes('page') || nameLower === 'pv' || nameLower.includes('view')) {
+      return EVENT_TYPES.PAGE;
+    }
+    if (nameLower.includes('click') || nameLower.includes('tap')) {
+      return EVENT_TYPES.CLICK;
+    }
+    if (nameLower.includes('exposure') || nameLower.includes('impression') || nameLower.includes('show')) {
+      return EVENT_TYPES.EXPOSURE;
+    }
+  }
+
+  if (event.data && typeof event.data === 'object') {
+    if (event.data.page || event.data.pageId || event.data.pageUrl || event.data.path) {
+      return EVENT_TYPES.PAGE;
+    }
+    if (event.data.elementId || event.data.target || event.data.buttonId) {
+      return EVENT_TYPES.CLICK;
+    }
+  }
+
+  return EVENT_TYPES.OTHER;
+}
 
 function isEmptyValue(value) {
   if (value === null || value === undefined) {
@@ -159,10 +218,28 @@ app.post('/api/track', (req, res) => {
     }
     cleaned.timestamp = cleaned.timestamp || Date.now();
     cleaned.receivedAt = new Date().toISOString();
+    cleaned.eventType = classifyEvent(cleaned);
     return cleaned;
   });
 
-  logs.push(...savedEvents);
+  const grouped = {
+    [EVENT_TYPES.PAGE]: [],
+    [EVENT_TYPES.CLICK]: [],
+    [EVENT_TYPES.EXPOSURE]: [],
+    [EVENT_TYPES.OTHER]: [],
+  };
+
+  savedEvents.forEach((event) => {
+    grouped[event.eventType].push(event);
+    logsByType[event.eventType].push(event);
+  });
+
+  const groupCounts = {
+    [EVENT_TYPES.PAGE]: grouped[EVENT_TYPES.PAGE].length,
+    [EVENT_TYPES.CLICK]: grouped[EVENT_TYPES.CLICK].length,
+    [EVENT_TYPES.EXPOSURE]: grouped[EVENT_TYPES.EXPOSURE].length,
+    [EVENT_TYPES.OTHER]: grouped[EVENT_TYPES.OTHER].length,
+  };
 
   return res.status(200).json({
     code: 200,
@@ -170,14 +247,46 @@ app.post('/api/track', (req, res) => {
     received: totalReceived,
     filtered: filteredCount,
     saved: savedEvents.length,
+    grouped: groupCounts,
   });
 });
 
-app.get('/api/track', (_req, res) => {
+app.get('/api/track', (req, res) => {
+  const typeParam = req.query.type;
+  const validTypes = Object.values(EVENT_TYPES);
+
+  if (typeParam) {
+    const typeKey = String(typeParam).toLowerCase();
+    if (!validTypes.includes(typeKey)) {
+      return res.status(400).json({
+        code: 400,
+        message: `不支持的 type 参数，可用值: ${validTypes.join(', ')}`,
+      });
+    }
+    const data = logsByType[typeKey];
+    return res.json({
+      code: 200,
+      total: data.length,
+      type: typeKey,
+      data,
+    });
+  }
+
+  const allLogs = getAllLogs();
+  const summary = validTypes.reduce((acc, type) => {
+    acc[type] = logsByType[type].length;
+    return acc;
+  }, {});
+
   res.json({
     code: 200,
-    total: logs.length,
-    data: logs,
+    total: allLogs.length,
+    summary,
+    grouped: validTypes.reduce((acc, type) => {
+      acc[type] = logsByType[type];
+      return acc;
+    }, {}),
+    data: allLogs,
   });
 });
 
